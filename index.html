@@ -1,0 +1,607 @@
+<!DOCTYPE html>
+<html lang="es">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Space Invaders</title>
+<style>
+  :root { --fg: #5ef08a; --line: #1d3b2a; --size: min(100%, 800px, 80vh); }
+  * { box-sizing: border-box; }
+  body {
+    margin: 0; min-height: 100vh; padding: 12px;
+    background: radial-gradient(circle at 50% 0%, #0a1622 0%, #05070d 70%);
+    color: var(--fg);
+    font-family: "Courier New", Courier, monospace;
+    display: flex; flex-direction: column; align-items: center; justify-content: center; gap: 10px;
+    user-select: none; -webkit-user-select: none; -webkit-tap-highlight-color: transparent;
+  }
+  #hud {
+    width: var(--size); display: flex; justify-content: space-between; align-items: center;
+    font-size: 14px; letter-spacing: 2px; text-transform: uppercase; padding: 0 4px;
+  }
+  #hud .group { display: flex; align-items: center; gap: 18px; }
+  #hud b { color: #d7ffe7; font-weight: 700; }
+  #lives { display: flex; gap: 5px; }
+  .life { width: 14px; height: 9px; background: var(--fg); clip-path: polygon(50% 0, 100% 100%, 0 100%); }
+  canvas {
+    display: block; width: var(--size); height: auto; aspect-ratio: 1 / 1;
+    background: #000; border: 2px solid var(--line); border-radius: 6px;
+    box-shadow: 0 0 50px rgba(94, 240, 138, .14);
+  }
+  #touch { display: none; width: var(--size); gap: 10px; }
+  #touch button {
+    flex: 1; padding: 18px 0; font-size: 22px; font-family: inherit; font-weight: 700;
+    color: var(--fg); background: #0d1a13; border: 2px solid var(--line); border-radius: 8px;
+  }
+  #touch button:active { background: #16311f; }
+  @media (pointer: coarse) { #touch { display: flex; } }
+</style>
+</head>
+<body>
+
+<div id="hud">
+  <div class="group"><span>Puntos</span><b id="score">00000</b></div>
+  <div class="group"><span>Récord</span><b id="hi">00000</b></div>
+  <div class="group"><span>Nivel</span><b id="level">1</b></div>
+  <div class="group"><span>Vidas</span><span id="lives"></span></div>
+</div>
+
+<canvas id="game" width="800" height="800"></canvas>
+
+<div id="touch">
+  <button id="btnLeft" aria-label="Izquierda">◀</button>
+  <button id="btnFire" aria-label="Disparar">●</button>
+  <button id="btnRight" aria-label="Derecha">▶</button>
+</div>
+
+<script>
+(function () {
+  'use strict';
+
+  var canvas = document.getElementById('game');
+  var ctx = canvas.getContext('2d');
+  var W = canvas.width, H = canvas.height;
+
+  var scoreEl = document.getElementById('score');
+  var hiEl = document.getElementById('hi');
+  var levelEl = document.getElementById('level');
+  var livesEl = document.getElementById('lives');
+
+  /* ---------------- sprites ---------------- */
+  var SQUID = [
+    '..1111..',
+    '.111111.',
+    '11111111',
+    '11.11.11',
+    '11111111',
+    '..1..1..',
+    '.1.11.1.',
+    '1.1..1.1'
+  ];
+  var CRAB = [
+    '..1.....1..',
+    '...1...1...',
+    '..1111111..',
+    '.11.111.11.',
+    '11111111111',
+    '1.1111111.1',
+    '1.1.....1.1',
+    '...11.11...'
+  ];
+  var OCTOPUS = [
+    '....1111....',
+    '.1111111111.',
+    '111111111111',
+    '111..11..111',
+    '111111111111',
+    '...1.11.1...',
+    '..1.1..1.1..',
+    '1.1........1'
+  ];
+  var SHIP = [
+    '.....1.....',
+    '....111....',
+    '....111....',
+    '.111111111.',
+    '11111111111',
+    '11111111111',
+    '11111111111'
+  ];
+
+  var CELL = 3;        // tamaño de píxel de los invasores
+  var SHIP_CELL = 4;   // tamaño de píxel de la nave
+  var COLS = 11, ROWS = 5;
+  var COL_GAP = 14, ROW_GAP = 14;
+  var COL_W = OCTOPUS[0].length * CELL;   // 36
+  var ROW_H = OCTOPUS.length * CELL;      // 24
+  var FLEET_TOP = 150;
+  var PAD = 26;                           // margen lateral del campo
+  var DROP = 16;
+
+  var COLORS = {
+    squid: '#5ef08a',
+    crab: '#7ad4ff',
+    octopus: '#ffd166',
+    ship: '#eef7ff',
+    playerShot: '#d9ffe9',
+    invaderShot: '#ff6b6b'
+  };
+
+  /* ---------------- estado ---------------- */
+  var state = 'title';   // title | playing | paused | levelclear | gameover
+  var score = 0, level = 1, lives = 3;
+  var hi = 0;
+  try { hi = parseInt(localStorage.getItem('si-hi') || '0', 10) || 0; } catch (e) { hi = 0; }
+
+  var invaders = [];
+  var playerShots = [];
+  var invaderShots = [];
+  var particles = [];
+  var stars = [];
+  var fleet = { dir: 1 };
+  var fireTimer = 0;
+  var stateTimer = 0;
+  var shake = 0;
+
+  var player = { x: 0, y: 0, w: SHIP[0].length * SHIP_CELL, h: SHIP.length * SHIP_CELL, speed: 330, cool: 0, inv: 0 };
+
+  /* ---------------- teclado ---------------- */
+  var pressed = {};
+
+  function keyName(e) {
+    switch (e.code) {
+      case 'ArrowLeft': case 'KeyA': return 'left';
+      case 'ArrowRight': case 'KeyD': return 'right';
+      case 'Space': case 'ArrowUp': case 'KeyW': return 'fire';
+      case 'KeyP': return 'pause';
+      case 'Enter': return 'start';
+      default: return null;
+    }
+  }
+
+  document.addEventListener('keydown', function (e) {
+    var k = keyName(e);
+    if (!k) return;
+    e.preventDefault();
+    pressed[k] = true;
+    if (e.repeat) return;
+
+    if (k === 'start') {
+      if (state === 'title' || state === 'gameover') resetGame();
+      else if (state === 'paused') state = 'playing';
+    } else if (k === 'pause') {
+      if (state === 'playing') state = 'paused';
+      else if (state === 'paused') state = 'playing';
+    } else if (k === 'fire') {
+      if (state === 'title' || state === 'gameover') resetGame();
+      else if (state === 'paused') state = 'playing';
+    }
+  });
+
+  document.addEventListener('keyup', function (e) {
+    var k = keyName(e);
+    if (k) { pressed[k] = false; e.preventDefault(); }
+  });
+
+  window.addEventListener('blur', function () { pressed = {}; });
+
+  function bindHold(el, key) {
+    if (!el) return;
+    el.addEventListener('pointerdown', function (e) { e.preventDefault(); pressed[key] = true; });
+    ['pointerup', 'pointercancel', 'pointerleave'].forEach(function (ev) {
+      el.addEventListener(ev, function () { pressed[key] = false; });
+    });
+  }
+  bindHold(document.getElementById('btnLeft'), 'left');
+  bindHold(document.getElementById('btnRight'), 'right');
+  bindHold(document.getElementById('btnFire'), 'fire');
+
+  /* ---------------- utilidades ---------------- */
+  function clamp(v, a, b) { return v < a ? a : (v > b ? b : v); }
+
+  function hit(a, b) {
+    return a.x < b.x + b.w && a.x + a.w > b.x && a.y < b.y + b.h && a.y + a.h > b.y;
+  }
+
+  function drawPattern(pat, x, y, cell, color) {
+    ctx.fillStyle = color;
+    var ox = Math.round(x), oy = Math.round(y);   // alineado al píxel: look retro nítido
+    for (var r = 0; r < pat.length; r++) {
+      var row = pat[r];
+      for (var c = 0; c < row.length; c++) {
+        if (row.charCodeAt(c) === 49) ctx.fillRect(ox + c * cell, oy + r * cell, cell, cell);
+      }
+    }
+  }
+
+  function burst(x, y, n, color) {
+    for (var i = 0; i < n; i++) {
+      var a = Math.random() * Math.PI * 2;
+      var s = 40 + Math.random() * 190;
+      particles.push({
+        x: x, y: y,
+        vx: Math.cos(a) * s,
+        vy: Math.sin(a) * s,
+        life: 0.35 + Math.random() * 0.5,
+        max: 0.85,
+        size: 1 + Math.random() * 2.5,
+        color: color
+      });
+    }
+  }
+
+  function makeStars() {
+    stars = [];
+    for (var i = 0; i < 170; i++) {
+      stars.push({
+        x: Math.random() * W,
+        y: Math.random() * H,
+        s: 0.6 + Math.random() * 1.6,
+        v: 8 + Math.random() * 26
+      });
+    }
+  }
+
+  function updateHUD() {
+    scoreEl.textContent = String(score).padStart(5, '0');
+    hiEl.textContent = String(hi).padStart(5, '0');
+    levelEl.textContent = String(level);
+    livesEl.innerHTML = '';
+    for (var i = 0; i < Math.max(0, lives); i++) {
+      var d = document.createElement('div');
+      d.className = 'life';
+      livesEl.appendChild(d);
+    }
+  }
+
+  /* ---------------- flota ---------------- */
+  function spawnFleet() {
+    invaders = [];
+    var fleetW = COLS * COL_W + (COLS - 1) * COL_GAP;
+    var startX = (W - fleetW) / 2;
+
+    for (var r = 0; r < ROWS; r++) {
+      for (var c = 0; c < COLS; c++) {
+        var pat = r === 0 ? SQUID : (r <= 2 ? CRAB : OCTOPUS);
+        var w = pat[0].length * CELL;
+        var h = pat.length * CELL;
+        invaders.push({
+          x: startX + c * (COL_W + COL_GAP) + (COL_W - w) / 2,
+          y: FLEET_TOP + r * (ROW_H + ROW_GAP),
+          w: w, h: h,
+          pat: pat,
+          col: c,
+          color: r === 0 ? COLORS.squid : (r <= 2 ? COLORS.crab : COLORS.octopus),
+          points: r === 0 ? 30 : (r <= 2 ? 20 : 10),
+          alive: true
+        });
+      }
+    }
+    fleet.dir = 1;
+  }
+
+  function resetPlayer() {
+    player.x = (W - player.w) / 2;
+    player.y = H - 80;
+    player.cool = 0;
+    player.inv = 0;
+  }
+
+  function resetGame() {
+    score = 0;
+    level = 1;
+    lives = 3;
+    playerShots = [];
+    invaderShots = [];
+    particles = [];
+    shake = 0;
+    spawnFleet();
+    resetPlayer();
+    fireTimer = 1.4;
+    stateTimer = 0;
+    state = 'playing';
+    updateHUD();
+  }
+
+  function fleetSpeed(aliveCount) {
+    var total = COLS * ROWS;
+    var frac = aliveCount / total;
+    return Math.min(130, (16 + level * 6) * (1 + 3 * (1 - frac)));
+  }
+
+  function invaderShotSpeed() {
+    return Math.min(460, 260 + level * 25);
+  }
+
+  function invaderFire() {
+    var lowest = {};
+    for (var i = 0; i < invaders.length; i++) {
+      var inv = invaders[i];
+      if (!inv.alive) continue;
+      var cur = lowest[inv.col];
+      if (!cur || inv.y > cur.y) lowest[inv.col] = inv;
+    }
+    var keys = Object.keys(lowest);
+    if (!keys.length) return;
+    var s = lowest[keys[(Math.random() * keys.length) | 0]];
+    invaderShots.push({ x: s.x + s.w / 2 - 2, y: s.y + s.h, w: 4, h: 12, vy: invaderShotSpeed() });
+  }
+
+  function gameOver() {
+    state = 'gameover';
+    if (score > hi) {
+      hi = score;
+      try { localStorage.setItem('si-hi', String(hi)); } catch (e) {}
+    }
+    burst(player.x + player.w / 2, player.y + player.h / 2, 34, COLORS.ship);
+    shake = 14;
+    updateHUD();
+  }
+
+  function loseLife() {
+    lives--;
+    burst(player.x + player.w / 2, player.y + player.h / 2, 20, COLORS.invaderShot);
+    shake = 10;
+    invaderShots = [];
+    updateHUD();
+    if (lives <= 0) { gameOver(); return; }
+    resetPlayer();
+    player.inv = 1.8;
+  }
+
+  /* ---------------- actualización ---------------- */
+  function update(dt) {
+    // fondo siempre vivo
+    for (var i = 0; i < stars.length; i++) {
+      var st = stars[i];
+      st.y += st.v * dt;
+      if (st.y > H) { st.y = -2; st.x = Math.random() * W; }
+    }
+    if (shake > 0) shake = Math.max(0, shake - dt * 40);
+
+    // partículas
+    for (var p = particles.length - 1; p >= 0; p--) {
+      var pa = particles[p];
+      pa.life -= dt;
+      if (pa.life <= 0) { particles.splice(p, 1); continue; }
+      pa.x += pa.vx * dt;
+      pa.y += pa.vy * dt;
+      pa.vy += 160 * dt;
+      pa.vx *= 0.98;
+    }
+
+    if (state === 'levelclear') {
+      stateTimer -= dt;
+      if (stateTimer <= 0) {
+        level++;
+        playerShots = [];
+        invaderShots = [];
+        spawnFleet();
+        resetPlayer();
+        fireTimer = 1.4;
+        state = 'playing';
+        updateHUD();
+      }
+      return;
+    }
+
+    if (state !== 'playing') return;
+
+    /* --- nave --- */
+    var vx = (pressed.left ? -1 : 0) + (pressed.right ? 1 : 0);
+    player.x = clamp(player.x + vx * player.speed * dt, 12, W - 12 - player.w);
+    if (player.inv > 0) player.inv = Math.max(0, player.inv - dt);
+
+    player.cool -= dt;
+    if (pressed.fire && player.cool <= 0 && playerShots.length < 1) {   // un disparo a la vez, como el original
+      playerShots.push({ x: player.x + player.w / 2 - 2, y: player.y - 12, w: 4, h: 12, vy: -720 });
+      player.cool = 0.24;
+    }
+
+    /* --- flota --- */
+    var alive = [];
+    for (var a = 0; a < invaders.length; a++) if (invaders[a].alive) alive.push(invaders[a]);
+
+    if (alive.length === 0) {
+      state = 'levelclear';
+      stateTimer = 1.5;
+      return;
+    }
+
+    var speed = fleetSpeed(alive.length);
+    var minX = Infinity, maxX = -Infinity;
+    for (var m = 0; m < alive.length; m++) {
+      alive[m].x += fleet.dir * speed * dt;
+      if (alive[m].x < minX) minX = alive[m].x;
+      if (alive[m].x + alive[m].w > maxX) maxX = alive[m].x + alive[m].w;
+    }
+
+    if (fleet.dir > 0 && maxX > W - PAD) {
+      var shiftR = maxX - (W - PAD);
+      for (var r1 = 0; r1 < alive.length; r1++) alive[r1].x -= shiftR;
+      dropFleet(alive);
+    } else if (fleet.dir < 0 && minX < PAD) {
+      var shiftL = PAD - minX;
+      for (var l1 = 0; l1 < alive.length; l1++) alive[l1].x += shiftL;
+      dropFleet(alive);
+    }
+
+    // invasión: la flota alcanza la nave
+    for (var inv2 = 0; inv2 < alive.length; inv2++) {
+      if (alive[inv2].y + alive[inv2].h >= player.y) {
+        burst(player.x + player.w / 2, player.y + player.h / 2, 34, COLORS.ship);
+        state = 'gameover';
+        if (score > hi) { hi = score; try { localStorage.setItem('si-hi', String(hi)); } catch (e) {} }
+        updateHUD();
+        return;
+      }
+    }
+
+    /* --- disparos de los invasores --- */
+    fireTimer -= dt;
+    if (fireTimer <= 0) {
+      invaderFire();
+      var frac = alive.length / (COLS * ROWS);
+      var base = Math.max(0.34, 1.5 - level * 0.1 - (1 - frac) * 0.7);
+      fireTimer = base * (0.6 + Math.random() * 0.9);
+    }
+
+    /* --- disparos de la nave --- */
+    for (var ps = playerShots.length - 1; ps >= 0; ps--) {
+      var s1 = playerShots[ps];
+      s1.y += s1.vy * dt;
+      if (s1.y + s1.h < 0) { playerShots.splice(ps, 1); continue; }
+      for (var t = 0; t < invaders.length; t++) {
+        var target = invaders[t];
+        if (!target.alive || !hit(s1, target)) continue;
+        target.alive = false;
+        playerShots.splice(ps, 1);
+        score += target.points;
+        burst(target.x + target.w / 2, target.y + target.h / 2, 12, target.color);
+        updateHUD();
+        break;
+      }
+    }
+
+    /* --- disparos de los invasores --- */
+    for (var is = invaderShots.length - 1; is >= 0; is--) {
+      var s2 = invaderShots[is];
+      s2.y += s2.vy * dt;
+      if (s2.y > H) { invaderShots.splice(is, 1); continue; }
+      if (player.inv <= 0 && hit(s2, player)) {
+        invaderShots.splice(is, 1);
+        loseLife();
+        if (state !== 'playing') return;
+      }
+    }
+  }
+
+  function dropFleet(alive) {
+    for (var i = 0; i < alive.length; i++) alive[i].y += DROP;
+    fleet.dir = -fleet.dir;
+  }
+
+  /* ---------------- dibujo ---------------- */
+  function render() {
+    ctx.save();
+    if (shake > 0.5) {
+      ctx.translate((Math.random() - 0.5) * shake, (Math.random() - 0.5) * shake);
+    }
+
+    ctx.fillStyle = '#04060b';
+    ctx.fillRect(-20, -20, W + 40, H + 40);
+
+    // estrellas
+    for (var i = 0; i < stars.length; i++) {
+      var st = stars[i];
+      ctx.fillStyle = 'rgba(140,200,255,' + (0.12 + st.s * 0.16) + ')';
+      ctx.fillRect(st.x, st.y, st.s, st.s);
+    }
+
+    // suelo
+    ctx.fillStyle = '#1d3b2a';
+    ctx.fillRect(0, H - 4, W, 4);
+
+    // invasores
+    for (var k = 0; k < invaders.length; k++) {
+      var inv = invaders[k];
+      if (inv.alive) drawPattern(inv.pat, inv.x, inv.y, CELL, inv.color);
+    }
+
+    // disparos
+    for (var a = 0; a < playerShots.length; a++) {
+      var ps = playerShots[a];
+      ctx.fillStyle = COLORS.playerShot;
+      ctx.fillRect(Math.round(ps.x), Math.round(ps.y), ps.w, ps.h);
+    }
+    for (var b = 0; b < invaderShots.length; b++) {
+      var is = invaderShots[b];
+      ctx.fillStyle = COLORS.invaderShot;
+      ctx.fillRect(Math.round(is.x), Math.round(is.y), is.w, is.h);
+      ctx.fillStyle = 'rgba(255,107,107,0.35)';
+      ctx.fillRect(Math.round(is.x) - 1, Math.round(is.y) + 3, is.w + 2, is.h - 3);
+    }
+
+    // nave
+    if (state !== 'gameover') {
+      var blink = player.inv > 0 && Math.floor(player.inv * 12) % 2 === 0;
+      if (!blink) drawPattern(SHIP, player.x, player.y, SHIP_CELL, COLORS.ship);
+    }
+
+    // partículas
+    for (var p = 0; p < particles.length; p++) {
+      var pa = particles[p];
+      ctx.globalAlpha = Math.max(0, Math.min(1, pa.life / pa.max));
+      ctx.fillStyle = pa.color;
+      ctx.fillRect(pa.x, pa.y, pa.size, pa.size);
+    }
+    ctx.globalAlpha = 1;
+
+    ctx.restore();
+
+    drawOverlays();
+  }
+
+  function text(str, y, size, color, alpha) {
+    ctx.save();
+    ctx.globalAlpha = alpha === undefined ? 1 : alpha;
+    ctx.fillStyle = color;
+    ctx.font = 'bold ' + size + 'px "Courier New", Courier, monospace';
+    ctx.textAlign = 'center';
+    ctx.textBaseline = 'middle';
+    ctx.fillText(str, W / 2, y);
+    ctx.restore();
+  }
+
+  function panel(y, h) {
+    ctx.fillStyle = 'rgba(3,6,12,0.72)';
+    ctx.fillRect(0, y, W, h);
+  }
+
+  function drawOverlays() {
+    var t = performance.now() / 1000;
+    var blink = 0.45 + 0.55 * Math.abs(Math.sin(t * 2.4));
+
+    if (state === 'title') {
+      panel(H / 2 - 150, 300);
+      text('SPACE INVADERS', H / 2 - 100, 58, COLORS.squid);
+      text('← →  o  A / D   para moverte', H / 2 - 20, 17, '#9fe8c0');
+      text('ESPACIO  para disparar', H / 2 + 10, 17, '#9fe8c0');
+      text('P  para pausar', H / 2 + 40, 17, '#9fe8c0');
+      text('PULSA ESPACIO PARA EMPEZAR', H / 2 + 95, 22, '#ffffff', blink);
+    } else if (state === 'paused') {
+      panel(H / 2 - 60, 120);
+      text('PAUSA', H / 2 - 12, 44, '#ffffff');
+      text('PULSA P PARA CONTINUAR', H / 2 + 34, 16, '#9fe8c0');
+    } else if (state === 'levelclear') {
+      text('NIVEL ' + (level + 1), H / 2 - 20, 46, COLORS.octopus);
+      text('¡OLEADA ELIMINADA!', H / 2 + 34, 18, '#9fe8c0');
+    } else if (state === 'gameover') {
+      panel(H / 2 - 110, 220);
+      text('GAME OVER', H / 2 - 60, 52, COLORS.invaderShot);
+      text('PUNTOS: ' + score, H / 2 + 4, 24, '#ffffff');
+      text('RÉCORD: ' + hi, H / 2 + 38, 20, '#9fe8c0');
+      text('PULSA ESPACIO PARA REINICIAR', H / 2 + 84, 19, '#ffffff', blink);
+    }
+  }
+
+  /* ---------------- bucle ---------------- */
+  var last = performance.now();
+  function loop(now) {
+    var dt = (now - last) / 1000;
+    last = now;
+    if (dt > 0.05) dt = 0.05;
+    update(dt);
+    render();
+    requestAnimationFrame(loop);
+  }
+
+  makeStars();
+  spawnFleet();
+  resetPlayer();
+  updateHUD();
+  requestAnimationFrame(loop);
+})();
+</script>
+</body>
+</html>

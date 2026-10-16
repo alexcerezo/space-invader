@@ -1,0 +1,14 @@
+{
+  "servers": {
+    "playwright": {
+      "type": "stdio",
+      "command": "wsl",
+      "args": [
+        "-e",
+        "bash",
+        "-lc",
+        "cd /home/alex/projects/space-invader && exec npx -y @playwright/mcp@latest --browser chromium"
+      ]
+    }
+  }
+}

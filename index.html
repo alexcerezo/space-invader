@@ -52,6 +52,7 @@
   <button id="btnLeft" aria-label="Izquierda">◀</button>
   <button id="btnFire" aria-label="Disparar">●</button>
   <button id="btnRight" aria-label="Derecha">▶</button>
+  <button id="btnPause" aria-label="Pausar partida">Ⅱ</button>
 </div>
 
 <script>
@@ -66,6 +67,7 @@
   var hiEl = document.getElementById('hi');
   var levelEl = document.getElementById('level');
   var livesEl = document.getElementById('lives');
+  var pauseButton = document.getElementById('btnPause');
 
   /* ---------------- sprites ---------------- */
   var SQUID = [
@@ -148,6 +150,14 @@
   /* ---------------- teclado ---------------- */
   var pressed = {};
 
+  function togglePause() {
+    if (state === 'playing') state = 'paused';
+    else if (state === 'paused') state = 'playing';
+    else return;
+    pauseButton.textContent = state === 'paused' ? '▶' : 'Ⅱ';
+    pauseButton.setAttribute('aria-label', state === 'paused' ? 'Reanudar partida' : 'Pausar partida');
+  }
+
   function keyName(e) {
     switch (e.code) {
       case 'ArrowLeft': case 'KeyA': return 'left';
@@ -160,6 +170,7 @@
   }
 
   document.addEventListener('keydown', function (e) {
+    if (e.target === pauseButton && (e.code === 'Space' || e.code === 'Enter')) return;
     var k = keyName(e);
     if (!k) return;
     e.preventDefault();
@@ -168,17 +179,17 @@
 
     if (k === 'start') {
       if (state === 'title' || state === 'gameover') resetGame();
-      else if (state === 'paused') state = 'playing';
+      else if (state === 'paused') togglePause();
     } else if (k === 'pause') {
-      if (state === 'playing') state = 'paused';
-      else if (state === 'paused') state = 'playing';
+      togglePause();
     } else if (k === 'fire') {
       if (state === 'title' || state === 'gameover') resetGame();
-      else if (state === 'paused') state = 'playing';
+      else if (state === 'paused') togglePause();
     }
   });
 
   document.addEventListener('keyup', function (e) {
+    if (e.target === pauseButton && (e.code === 'Space' || e.code === 'Enter')) return;
     var k = keyName(e);
     if (k) { pressed[k] = false; e.preventDefault(); }
   });
@@ -195,6 +206,7 @@
   bindHold(document.getElementById('btnLeft'), 'left');
   bindHold(document.getElementById('btnRight'), 'right');
   bindHold(document.getElementById('btnFire'), 'fire');
+  pauseButton.addEventListener('click', togglePause);
 
   /* ---------------- utilidades ---------------- */
   function clamp(v, a, b) { return v < a ? a : (v > b ? b : v); }
